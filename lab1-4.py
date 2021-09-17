@@ -17,6 +17,7 @@ struct data_t {
     u64 sector;
     u64 len;
     char name[TASK_COMM_LEN];
+    char disk_name[DISK_NAME_LEN];
 };
 
 BPF_PERF_OUTPUT(events);
@@ -34,6 +35,8 @@ void trace_rw(struct pt_regs *ctx, struct request *req){
 
     data.len = req->__data_len;
     data.sector = req->__sector;
+    
+    bpf_probe_read_kernel(&data.disk_name, sizeof(data.disk_name), req->rq_disk->disk_name);
      
     events.perf_submit(ctx, &data, sizeof(data));
 }
@@ -45,7 +48,7 @@ b = BPF(text=bpf_text)
 b.attach_kprobe(event="blk_start_request", fn_name="trace_rw")
 
 # header
-print("%-20s %-5s %-20s %-7s" % ("Random/Sequential", "COMM", "SECTOR", "BYTES"), end="")
+print("%-20s %-5s %-7s %-20s %-7s" % ("Random/Sequential", "COMM", "DISK", "SECTOR", "BYTES"), end="")
 
 rwflg = ""
 breq = {"rwflag" : 0, "len" : 0, "sector" : 0}
@@ -71,7 +74,7 @@ def print_event(cpu, data, size):
     else:
         rwflg = "Read"
 
-    print("%-20s %-5s %-20s %-7s" % (ran_seq, rwflg, event.sector, event.len))
+    print("%-20s %-5s %-7s %-20s %-7s" % (ran_seq, rwflg, event.disk_name.decode('utf-8', 'replace'), event.sector, event.len))
 
 # loop with callback to print_event
 b["events"].open_perf_buffer(print_event, page_cnt=64)
