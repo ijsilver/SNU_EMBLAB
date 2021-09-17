@@ -15,6 +15,7 @@ struct data_t {
     long cnt;
     u64 delta;
     u64 RW;
+    char type;
     char comm[TASK_COMM_LEN];
     char fname[DNAME_INLINE_LEN];
 };
@@ -28,6 +29,37 @@ void read_monitor(struct pt_regs *ctx, struct file* file){
     struct data_t data = {};
     data.pid = bpf_get_current_pid_tgid() >> 32;
     data.RW = 0;
+
+    u64 type = file->f_inode->i_mode;
+
+    type = type >> 12;
+    type = type << 12;
+    switch(type){
+        case S_IFREG:
+            data.type = '-';
+            break;
+        case S_IFDIR:
+            data.type = 'd';
+            break;
+        case S_IFCHR:
+            data.type = 'c';
+            break;
+        case S_IFBLK:
+            data.type = 'b';
+            break;
+        case S_IFLNK:
+            data.type = 'l';
+            break;
+        case S_IFIFO:
+            data.type = 'p';
+            break;
+        case S_IFSOCK:
+            data.type = 's';
+            break;
+        default:
+            data.type = '?';
+            break;
+    }
 
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     u64 cnt;
@@ -53,6 +85,36 @@ void write_monitor(struct pt_regs *ctx, struct file* file){
     data.pid = bpf_get_current_pid_tgid() >> 32;
     data.RW = 1;
 
+    u64 type = file->f_inode->i_mode;
+
+    type = type >> 12;
+    type = type << 12;
+    switch(type){
+        case S_IFREG:
+            data.type = '-';
+            break;
+        case S_IFDIR:
+            data.type = 'd';
+            break;
+        case S_IFCHR:
+            data.type = 'c';
+            break;
+        case S_IFBLK:
+            data.type = 'b';
+            break;
+        case S_IFLNK:
+            data.type = 'l';
+            break;
+        case S_IFIFO:
+            data.type = 'p';
+            break;
+        case S_IFSOCK:
+            data.type = 's';
+            break;
+        default:
+            data.type = '?';
+            break;
+    }
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     u64 cnt;
     long* ret;
@@ -76,13 +138,13 @@ void write_monitor(struct pt_regs *ctx, struct file* file){
 # process event
 def print_event(cpu, data, size):
     event = b["events"].event(data)
-    file_type = subprocess.check_output(['file', event.comm])
-    file_type = file_type.split(':')[1]
+#    file_type = subprocess.check_output(['file', event.comm])
+#    file_type = file_type.split(':')[1]
    # print(file_type)
-    if event.RW==0 and event.cnt%100==0:
-        print("%-10s %-6d %-20s %-30s %ld" % ("Read", event.pid, event.comm, file_type, event.cnt));
-    elif event.RW==0 and event.cnt%100==0:
-        print("%-10s %-6d %-20s %-30s %ld" % ("Write", event.pid, event.comm, file_type, event.cnt));
+    if event.RW==0 and event.cnt%10==0:
+        print("%-10s %-6d %-20s %-30s %ld" % ("Read", event.pid, event.comm, event.type, event.cnt));
+    elif event.RW==1 and event.cnt%10==0:
+        print("%-10s %-6d %-20s %-30s %ld" % ("Write", event.pid, event.comm, event.type, event.cnt));
 
 
 # initialize BPF
