@@ -45,7 +45,7 @@ b = BPF(text=bpf_text)
 b.attach_kprobe(event="blk_start_request", fn_name="trace_rw")
 
 # header
-print("%-20s %-5s %-20s %-7s" % ("Random/Sequential", "COMM", "SECTOR", "BYTES"), end="")
+print("%-20s %-5s %-20s %-7s" % ("Random/Sequential", "COMM", "SECTOR", "BYTES"))
 
 rwflg = ""
 breq = {"rwflag" : 0, "len" : 0, "sector" : 0}
