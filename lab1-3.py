@@ -1,68 +1,99 @@
 #!/usr/bin/python
-#
-# oomkill   Trace oom_kill_process(). For Linux, uses BCC, eBPF.
-#
-# This traces the kernel out-of-memory killer, and prints basic details,
-# including the system load averages. This can provide more context on the
-# system state at the time of OOM: was it getting busier or steady, based
-# on the load averages? This tool may also be useful to customize for
-# investigations; for example, by adding other task_struct details at the time
-# of OOM.
-#
-# Copyright 2016 Netflix, Inc.
-# Licensed under the Apache License, Version 2.0 (the "License")
-#
-# 09-Feb-2016   Brendan Gregg   Created this.
 
 from bcc import BPF
 from time import strftime
-
-# linux stats
-loadavg = "/proc/loadavg"
-
+import os
+import subprocess
 # define BPF program
 bpf_text = """
 #include <uapi/linux/ptrace.h>
-#include <linux/oom.h>
+#include <linux/fs.h>
+#include <linux/sched.h>
 
 struct data_t {
-    u32 fpid;
-    u32 tpid;
-    u64 pages;
-    char fcomm[TASK_COMM_LEN];
-    char tcomm[TASK_COMM_LEN];
+    u32 pid;
+    long cnt;
+    u64 delta;
+    u64 RW;
+    char comm[TASK_COMM_LEN];
+    char fname[DNAME_INLINE_LEN];
 };
+
+BPF_HASH(read_cnt, char *, long);
+BPF_HASH(write_cnt, char *);
 
 BPF_PERF_OUTPUT(events);
 
-void kprobe__oom_kill_process(struct pt_regs *ctx, struct oom_control *oc, const char *message)
-{
-    unsigned long totalpages;
-    struct task_struct *p = oc->chosen;
+void read_monitor(struct pt_regs *ctx, struct file* file){
     struct data_t data = {};
-    u32 pid = bpf_get_current_pid_tgid() >> 32;
-    data.fpid = pid;
-    data.tpid = p->pid;
-    data.pages = oc->totalpages;
-    bpf_get_current_comm(&data.fcomm, sizeof(data.fcomm));
-    bpf_probe_read_kernel(&data.tcomm, sizeof(data.tcomm), p->comm);
+    data.pid = bpf_get_current_pid_tgid() >> 32;
+    data.RW = 0;
+
+    bpf_get_current_comm(&data.comm, sizeof(data.comm));
+    u64 cnt;
+    long* ret;
+    ret = read_cnt.lookup(&data.comm);
+
+    if(ret==NULL){
+        cnt = 1;
+        read_cnt.update(&data.comm, &cnt);
+    }
+    else{
+        cnt = *ret+1;
+        read_cnt.update(&data.comm, &cnt);
+    }
+    data.cnt = cnt;
+  
+    events.perf_submit(ctx, &data, sizeof(data));
+    
+}
+
+void write_monitor(struct pt_regs *ctx, struct file* file){
+    struct data_t data = {};
+    data.pid = bpf_get_current_pid_tgid() >> 32;
+    data.RW = 1;
+
+    bpf_get_current_comm(&data.comm, sizeof(data.comm));
+    u64 cnt;
+    long* ret;
+    ret = read_cnt.lookup(&data.comm);
+
+    if(ret==NULL){
+        cnt = 1;
+        read_cnt.update(&data.comm, &cnt);
+    }
+    else{
+        cnt = *ret+1;
+        read_cnt.update(&data.comm, &cnt);
+    }
+    data.cnt = cnt;
+  
     events.perf_submit(ctx, &data, sizeof(data));
 }
+
 """
 
 # process event
 def print_event(cpu, data, size):
     event = b["events"].event(data)
-    with open(loadavg) as stats:
-        avgline = stats.read().rstrip()
-    print(("%s Triggered by PID %d (\"%s\"), OOM kill of PID %d (\"%s\")"
-        ", %d pages, loadavg: %s") % (strftime("%H:%M:%S"), event.fpid,
-        event.fcomm.decode('utf-8', 'replace'), event.tpid,
-        event.tcomm.decode('utf-8', 'replace'), event.pages, avgline))
+    file_type = subprocess.check_output(['file', event.comm])
+    file_type = file_type.split(':')[1]
+   # print(file_type)
+    if event.RW==0 and event.cnt%100==0:
+        print("%-10s %-6d %-20s %-30s %ld" % ("Read", event.pid, event.comm, file_type, event.cnt));
+    elif event.RW==0 and event.cnt%100==0:
+        print("%-10s %-6d %-20s %-30s %ld" % ("Write", event.pid, event.comm, file_type, event.cnt));
+
 
 # initialize BPF
 b = BPF(text=bpf_text)
-print("Tracing OOM kills... Ctrl-C to stop.")
+b.attach_kprobe(event="vfs_read", fn_name="read_monitor")
+b.attach_kprobe(event="vfs_readv", fn_name="read_monitor")
+b.attach_kprobe(event="vfs_write", fn_name="write_monitor")
+b.attach_kprobe(event="vfs_writev", fn_name="write_monitor")
+print("%-10s %-6s %-20s %-30s %s" % ("Read/Write", "PID", "COMM", "FILE TYPE", "COUNT"))
+
+
 b["events"].open_perf_buffer(print_event)
 while 1:
     try:
